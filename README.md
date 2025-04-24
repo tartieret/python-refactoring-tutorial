@@ -22,7 +22,7 @@ This tutorial follows an iterative improvement approach. We'll start with a basi
 - **Version 2**: Adding Error Handling and Logging
 - **Version 3**: Split the responsibilities into different functions
 
-Each version will be saved in its own Python file (`v1.py`, `v2.py`, etc.) so you can see the progression of improvements.
+Each version will be saved in its own Python module (`v1.py`, `v2.py`, etc.) so you can see the progression of improvements. In a real project, the code will be broken into different files and modules.
 
 ## Why This Matters
 
@@ -194,13 +194,13 @@ def run_etl() -> None:
 
 We can see that once we bring in "real life" consideration with error handling and different possible code paths, the code turns into spaghetti soup and becomes hard to understand. If you were not convinced, the point raised in the previous section about testability is even more relevant: it's cumbersome to write tests for all the possible paths.
 
-When I see this type of code, it typically means that the developer consider testing as an afterthought, not a priority. If you try to write tests "as you go" (even if you don't follow a strict Test-Driven-Development approach), you'll tend to proceed in more elementary steps, which will lead to a more structured and maintainable codebase.
+When I see this type of code, it typically means that the developer considered testing as an afterthought, not a priority. If you try to write tests "as you go" (even if you don't follow a strict Test-Driven-Development approach), you'll tend to proceed in more elementary steps, which will lead to a more structured and maintainable codebase. This is also transparent in the git history, and typically differentiate seasoned developers, who are in control of their process, from less experienced ones, who are only aiming at finding the solution.
 
 ## v3: Split the responsibilities into different functions
 
 Let's take a step back, restart from scratch and follow a more structured approach.
 
-First, we'll want to write a function that run a query and return the results. We can easily write tests for that, making sure that the SQL query is correct.
+First, we'll want to write a function that runs a query and returns the results. We can easily write tests for that, making sure that the SQL query is correct.
 
 ```python
 def run_query(param: int) -> list[tuple]:
@@ -276,3 +276,197 @@ Note that this new version is not longer than the previous one, and wouldn't tak
 - you can catch errors earlier
 - you can write tests more easily
 - your reviewer will have to spend less time understanding the code, and the likeliness of missing a defect is reduced
+
+## v4: Stronger isolation of concerns with better typing
+
+In real life, the code from v3 may be fine for a while. However, as the system evolves, your database schema may change, and the query will have to be updated. The same goes for the API endpoint, which may change over time.
+
+We can observe that the `transform_data` function makes an assumption on the way the data is structured, to be able to calculate the total amount spent by a user by multiplying the number of purchased items with their unit price, as shown in the snippet below:
+
+```python
+for row in records:
+    transformed["data"].append({
+        "userId": row[2],
+        "itemName": row[2].upper(),
+        "totalSpent": row[3] * row[4]
+    })
+```
+
+This means that if I want to check that this code is correct, I have to go back to the `load_data` function, and even within this function review the SQL query itself. In the type of applications that I have been working on lately, this SQL query may be extremely complex, making this kind of review time-consuming and error-prone. In addition, if the database schema changes, the query will have to be updated, and the `transform_data` function will have to be updated as well, which may introduce new errors.
+
+This could have been avoided from the start by defining a better "contract" between each parts of the code.
+
+Let's define a type for the data that is passed between the functions:
+
+```python
+@dataclass
+class Purchase:
+    id: int
+    user_id: int
+    item: str
+    quantity: int
+    price: float
+```
+
+This defines a new data structure with a fixed number of properties and typing information, making it clear what data is expected and what is returned.
+
+Now, let's update `run_query` to use this type:
+
+```python
+def run_query(param: int) -> List[Purchase]:
+    """Run a query and return the results."""
+    logger.info(f"Executing query for category_id = {param}")
+
+    conn = None
+    cursor = None
+    
+    try:
+        conn = psycopg2.connect(
+            host=os.getenv('PG_HOST'),
+            database=os.getenv('PG_DB'),
+            user=os.getenv('PG_USER'),
+            password=os.getenv('PG_PASSWORD')
+        )
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, user_id, item, quantity, price FROM purchases WHERE category_id = %s", (param,))
+        results = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        return [Purchase(id=row[0], user_id=row[1], item=row[2], quantity=row[3], price=row[4]) for row in results]
+    except Exception as e:
+        logger.error(f"Database error during query for category_id = {param}: {e}")
+        return []
+```
+
+We can now see that the return statement of `run_query` is now clear and self-documenting. If the SQL query is modified in the future, we only have to update the function and may not have to change the `Purchase` type.
+
+Let's update `transform_data` to use this type:
+
+```python
+def transform_data(category_id: int, records: List[Purchase]) -> Dict[str, Any]:
+    """Transform the data."""
+    transformed = {
+        "categoryId": category_id,
+        "data": []
+    }
+    
+    for row in records:
+        transformed["data"].append({
+            "userId": row.user_id,
+            "itemName": row.item.upper(),
+            "totalSpent": row.quantity * row.price
+        })
+    
+    return transformed
+```
+
+The calculation of `totalSpent` is now self-documenting and we can see that it's the product of `quantity` and `price`. Purists may argue that this function is still doing too much. The advantage of using a dataclass is that we can consider moving the calculation of `totalSpent` to a separate function, which would make the code more maintainable, like this:
+
+```python
+@dataclass
+class Purchase:
+    id: int
+    user_id: int
+    item: str
+    quantity: int
+    price: float
+    
+    @property
+    def total_spent(self) -> float:
+        """Calculate the total amount spent on this purchase."""
+        return self.quantity * self.price
+```
+
+And the final version of `transform_data` would be:
+
+```python
+def transform_data(category_id: int, records: List[Purchase]) -> Dict[str, Any]:
+    """Transform the data."""
+    transformed = {
+        "categoryId": category_id,
+        "data": []
+    }
+    
+    for row in records:
+        transformed["data"].append({
+            "userId": row.user_id,
+            "itemName": row.item.upper(),
+            "totalSpent": row.total_spent
+        })
+    
+    return transformed
+```
+
+The attentive reader will notice that we have the same dependency and readability problem between the `transform_data` function and the `load_data` one.
+
+Let's fix this by creating a new dataclass for the API data:
+
+```python
+
+@dataclass
+class APIRecord:
+    """Represents a single record to be sent to the API."""
+    user_id: int
+    item_name: str
+    total_spent: float
+
+@dataclass
+class APIData:
+    """Represents the transformed data structure to be sent to the API.
+    
+    Attributes:
+        category_id (int): The category ID for this batch of data.
+        data (List[APIRecord]): The list of transformed purchase records.
+    """
+    category_id: int
+    data: List[APIRecord]
+```
+
+Now, let's update `transform_data` and `load_data` to use this new dataclass:
+
+```python
+def transform_data(category_id: int, records: List[Purchase]) -> APIData:
+    """Transform the data."""
+    transformed = {
+        "categoryId": category_id,
+        "data": []
+    }
+    
+    for row in records:
+        transformed["data"].append({
+            "userId": row.user_id,
+            "itemName": row.item.upper(),
+            "totalSpent": row.total_spent
+        })
+    
+    return APIData(
+        category_id=category_id,
+        data=[APIRecord(
+            user_id=row.user_id,
+            item_name=row.item.upper(),
+            total_spent=row.total_spent
+        ) for row in records]
+    )
+
+def load_data(payload: APIData) -> None:
+    """Load the data."""
+    response = requests.post(
+        "https://api.example.com/receive",
+        json={
+            "categoryId": payload.category_id,
+            "data": [{
+                "userId": row.user_id,
+                "itemName": row.item_name,
+                "totalSpent": row.total_spent
+            } for row in payload.data]
+        },
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + os.getenv('API_TOKEN')
+        }
+    )
+    if response.status_code >= 200 and response.status_code < 300:
+        print(f"Status Code: {response.status_code}")
+    else:
+        print(f"Status Code: {response.status_code}")
+```
