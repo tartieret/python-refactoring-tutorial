@@ -1,0 +1,4 @@
+## Code Style
+
+- Use Ruff for code formatting and style checking
+- Use Google style for docstrings

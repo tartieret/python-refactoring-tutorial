@@ -1,0 +1,118 @@
+__pycache__/
+*.egg-info/
+*.egg
+*.spec
+*.log
+*.pot
+*.mo
+*.db
+*.sqlite
+*.db-journal
+*.py[co]
+*.mo
+local_settings.py
+instance
+.develop
+.env
+.eggs
+dist
+build
+.tox
+.nox
+.coverage
+.cache
+nosetests.xml
+coverage.xml
+*.egg
+*.pyc
+*.pyo
+.DS_Store
+.env
+.env.example
+.venv
+.venv3
+.venv2
+.pytest_cache
+.tox
+.nox
+.eggs
+.egg-info
+dist
+build
+local_settings.py
+
+# PyInstaller
+#  If you build exe, uncomment the following line
+# dist/
+# build/
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothes.is
+.hypothes.is.*
+.cache
+nosetests.xml
+coverage.xml
+.pytest_cache
+
+# Translations
+*.mo
+*.pot
+
+# Django stuff:
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# Flask stuff:
+instance
+.webassets-cache
+
+# Scrapy stuff:
+.scrapy
+
+# Sphinx documentation
+docs/_build/
+
+# PyBuilder
+target/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pyenv
+.python-version
+
+# pip-tools
+.pip-tools
+
+# PEP 582; used by e.g. github.com/David-OConnor/py_otherside
+__pypackages__/
+
+# Celery stuff
+celerybeat-schedule
+celerybeat-schedule.db
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
+.env
+.venv
+.env.bak
+.venv.bak
+__pycache__/
