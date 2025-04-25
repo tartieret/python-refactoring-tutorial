@@ -22,11 +22,11 @@ In this tutorial, I'll focus on a practical example directly inspired from recen
 
 ## The Example: An ETL Process
 
-We'll build a program that implements a simple Extract-Transform-Load (ETL) process:
+We'll build a program that implements a simple Extract-Transform-Load (ETL) process, taking the example of an e-commerce application that needs to send data to a third-party HTTP server (for instance for business analytics):
 
-- **Extract**: Execute SQL queries with different parameters to retrieve purchases from a database
-- **Transform**: Process and modify the extracted data
-- **Load**: Send the transformed data to a third-party HTTP server
+- **Extract**: Retrieve all purchases for the last hour
+- **Transform**: Process and modify the extracted data to match the third-party HTTP server's requirements
+- **Load**: Send the transformed data to a third-party HTTP server. Unfortunately, the third-party HTTP API requires the data to be split by category of product, so we have to send the data in batches. We don't have control on this server, so we can't change that.
 
 ## Tutorial Structure
 
@@ -40,47 +40,70 @@ Each version will be saved in its own Python module (`v1.py`, `v2.py`, etc.) so 
 
 # v1: Simple Implementation
 
-Our first version is a straightforward implementation of the ETL process in a single function. It connects to a PostgreSQL database, executes 5 queries with different parameters, transforms the results, and sends the data to a third-party HTTP server.
-
-Note for the nitpickers: yes, we could retrieve all the data in one query, but that's not the point here. Let's consider a case where we want to retrieve the data in batches.
+Our first version is a straightforward implementation of the ETL process in a single function. It connects to a PostgreSQL database, execute a query to retrieve data from the last hour, transforms the results, and sends the data to the third-party HTTP server.
 
 ```python
 def run_etl():
-    """Run the ETL process. 
-    
-    This code connects to a PostgreSQL database, performs 5 queries, 
-    transform the results and send the data to a third-party HTTP server.
+    """Run the ETL process.
+
+    This code connects to a PostgreSQL database, retrieves data from the last hour,
+    transforms the results and sends the data to a third-party HTTP server.
+
+    The 3rd party server requires the data to be split by category of product, so we have to send
+    the data in batches.
+
     """
+    # Connect to the database
     conn = psycopg2.connect(
-        host=os.getenv('PG_HOST'),
-        database=os.getenv('PG_DB'),
-        user=os.getenv('PG_USER'),
-        password=os.getenv('PG_PASSWORD'))
+        host=os.getenv("PG_HOST"),
+        database=os.getenv("PG_DB"),
+        user=os.getenv("PG_USER"),
+        password=os.getenv("PG_PASSWORD"),
+    )
     cursor = conn.cursor()
 
-    for i in range(5):
-        cursor.execute("SELECT id, user_id, item, quantity, price FROM purchases WHERE category_id = %s", (i,))
-        results = cursor.fetchall()
-        transformed = {
-            "category_id": i,
-            "data": []
-        }
-        for row in results:
-            transformed["data"].append({
+    # Calculate timestamp for 1 hour ago
+    one_hour_ago = datetime.now() - timedelta(hours=1)
+
+    # Execute a single query to get all data from the last hour
+    cursor.execute(
+        """SELECT id, user_id, item, quantity, price, category_id, timestamp 
+           FROM purchases 
+           WHERE timestamp >= %s
+           ORDER BY category_id""",
+        (one_hour_ago,),
+    )
+    results = cursor.fetchall()
+
+    # Group results by category_id
+    categorized_data = {}
+    for row in results:
+        category_id = row[5]  # category_id is at index 5
+
+        if category_id not in categorized_data:
+            categorized_data[category_id] = {"category_id": category_id, "data": []}
+
+        # Transform the data
+        categorized_data[category_id]["data"].append(
+            {
                 "user_id": row[1],
                 "item_name": row[2].upper(),
-                "total_spent": row[3] * row[4]
-            })
-        
-        # Push each batch of data to the HTTP endpoint separately
-        # we assume the 3rd party server required token authentication
-        response = requests.post("https://api.example.com/receive",
-                                json=transformed,
-                                headers={
-                                    "Content-Type": "application/json",
-                                    "Authorization": "Bearer " + os.getenv('API_TOKEN')
-                                })
-        print(f"Batch {i} - Status Code: {response.status_code}")
+                "total_spent": row[3] * row[4],
+                "timestamp": row[6].isoformat() if row[6] else None,
+            }
+        )
+
+    # Send each category batch to the API
+    for category_id, transformed in categorized_data.items():
+        response = requests.post(
+            "https://api.example.com/receive",
+            json=transformed,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": "Bearer " + os.getenv("API_TOKEN"),
+            },
+        )
+        print(f"Category {category_id} - Status Code: {response.status_code}")
 
     cursor.close()
     conn.close()
@@ -88,7 +111,7 @@ def run_etl():
 
 ## Analysis of v1
 
-This implementation isn't necessarily "bad" code. In fact, it's the kind of thing you might write as a single-use tool—quick and dirty, getting the job done without much ceremony.
+This implementation isn't necessarily "bad" code. It efficiently retrieves data from the last hour using a timestamp column and groups it by category before sending it to the API. This approach is more efficient than running multiple queries as it minimizes database round trips.
 
 However, in the context of a larger project, this approach isn't ideal for several reasons:
 
