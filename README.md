@@ -59,17 +59,17 @@ def run_etl():
     cursor = conn.cursor()
 
     for i in range(5):
-        cursor.execute("SELECT id, user_id, item, quantity, price FROM purchases WHERE category_id = ?", (i,))
+        cursor.execute("SELECT id, user_id, item, quantity, price FROM purchases WHERE category_id = %s", (i,))
         results = cursor.fetchall()
         transformed = {
-            "categoryId": i,
+            "category_id": i,
             "data": []
         }
         for row in results:
             transformed["data"].append({
-                "userId": row[1],
-                "itemName": row[2].upper(),
-                "totalSpent": row[3] * row[4]
+                "user_id": row[1],
+                "item_name": row[2].upper(),
+                "total_spent": row[3] * row[4]
             })
         
         # Push each batch of data to the HTTP endpoint separately
@@ -150,14 +150,14 @@ def run_etl() -> None:
                 
                 # Transform data
                 transformed = {
-                    "categoryId": i,
+                    "category_id": i,
                     "data": []
                 }
                 for row in results:
                     transformed["data"].append({
-                        "userId": row[1],
-                        "itemName": row[2].upper(),
-                        "totalSpent": row[3] * row[4]
+                        "user_id": row[1],
+                        "item_name": row[2].upper(),
+                        "total_spent": row[3] * row[4]
                     })
                 
                 # Load data to API
@@ -228,14 +228,14 @@ As a second step, I can now focus on the transformation of the data.
 def transform_data(category_id: int, records: list[tuple]) -> dict:
     """Transform the data."""
     transformed = {
-        "categoryId": category_id,
+        "category_id": category_id,
         "data": []
     }
     for row in records:
         transformed["data"].append({
-            "userId": row[2],
-            "itemName": row[2].upper(),
-            "totalSpent": row[3] * row[4]
+            "user_id": row[2],
+            "item_name": row[2].upper(),
+            "total_spent": row[3] * row[4]
         })
     return transformed
 ```
@@ -289,9 +289,9 @@ We can observe that the `transform_data` function makes an assumption on the way
 ```python
 for row in records:
     transformed["data"].append({
-        "userId": row[2],
-        "itemName": row[2].upper(),
-        "totalSpent": row[3] * row[4]
+        "user_id": row[2],
+        "item_name": row[2].upper(),
+        "total_spent": row[3] * row[4]
     })
 ```
 
@@ -349,15 +349,15 @@ Let's update `transform_data` to use this type:
 def transform_data(category_id: int, records: List[Purchase]) -> Dict[str, Any]:
     """Transform the data."""
     transformed = {
-        "categoryId": category_id,
+        "category_id": category_id,
         "data": []
     }
     
     for row in records:
         transformed["data"].append({
-            "userId": row.user_id,
-            "itemName": row.item.upper(),
-            "totalSpent": row.quantity * row.price
+            "user_id": row.user_id,
+            "item_name": row.item.upper(),
+            "total_spent": row.quantity * row.price
         })
     
     return transformed
@@ -386,15 +386,15 @@ And the final version of `transform_data` would be:
 def transform_data(category_id: int, records: List[Purchase]) -> Dict[str, Any]:
     """Transform the data."""
     transformed = {
-        "categoryId": category_id,
+        "category_id": category_id,
         "data": []
     }
     
     for row in records:
         transformed["data"].append({
-            "userId": row.user_id,
-            "itemName": row.item.upper(),
-            "totalSpent": row.total_spent
+            "user_id": row.user_id,
+            "item_name": row.item.upper(),
+            "total_spent": row.total_spent
         })
     
     return transformed
@@ -428,9 +428,11 @@ class APIData:
 Now, let's update `transform_data` and `load_data` to use this new dataclass:
 
 ```python
+from dataclasses import asdict
+
 def transform_data(category_id: int, records: List[Purchase]) -> APIData:
     """Transform the data."""
-        return APIData(
+    return APIData(
         category_id=category_id,
         data=[APIRecord(
             user_id=row.user_id,
@@ -443,14 +445,7 @@ def load_data(payload: APIData) -> None:
     """Load the data."""
     response = requests.post(
         "https://api.example.com/receive",
-        json={
-            "categoryId": payload.category_id,
-            "data": [{
-                "userId": row.user_id,
-                "itemName": row.item_name,
-                "totalSpent": row.total_spent
-            } for row in payload.data]
-        },
+        json=asdict(payload),
         headers={
             "Content-Type": "application/json",
             "Authorization": "Bearer " + os.getenv('API_TOKEN')
