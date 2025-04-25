@@ -30,8 +30,7 @@ def run_etl():
     cursor.execute(
         """SELECT id, user_id, item, quantity, price, category_id, timestamp 
            FROM purchases 
-           WHERE timestamp >= %s
-           ORDER BY category_id""",
+           WHERE timestamp >= %s""",
         (one_hour_ago,),
     )
     results = cursor.fetchall()

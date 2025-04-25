@@ -1,7 +1,7 @@
 """
-ETL process implementation with error handling and logging.
+ETL process implementation with error handling, logging, and retry logic.
 
-This version improves upon v1 by adding proper error handling and logging.
+This version improves upon v1 by adding proper error handling, logging, and retry logic for API calls.
 """
 
 import os
@@ -9,6 +9,9 @@ import logging
 import sys
 import psycopg2
 import requests
+from datetime import datetime, timedelta
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 
 # Configure logging
@@ -23,13 +26,29 @@ logger = logging.getLogger("etl_process")
 def run_etl() -> None:
     """Run the ETL process.
 
-    This code connects to a PostgreSQL database, performs 5 queries,
+    This code connects to a PostgreSQL database, retrieves data from the last hour,
     transforms the results and sends the data to a third-party HTTP server.
 
-    Adds error handling and logging compared to v1.
+    The 3rd party server requires the data to be split by category of product, so we have to send
+    the data in batches.
+
+    Adds error handling, logging, and retry logic compared to v1.
     """
+    logger.info("Starting ETL process")
+
     conn = None
     cursor = None
+
+    # Setup retry strategy for API calls
+    retry_strategy = Retry(
+        total=3,  # Maximum number of retries
+        backoff_factor=1,  # Time factor between retries
+        status_forcelist=[429, 500, 502, 503, 504],  # HTTP status codes to retry on
+    )
+    adapter = HTTPAdapter(max_retries=retry_strategy)
+    session = requests.Session()
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
 
     try:
         # Connect to database
@@ -42,40 +61,56 @@ def run_etl() -> None:
         )
         cursor = conn.cursor()
 
-        # Process each batch separately
-        for i in range(5):
-            try:
-                # Extract data
-                logger.info(f"Executing query for category_id = {i}")
-                cursor.execute(
-                    "SELECT id, user_id, item, quantity, price FROM purchases WHERE category_id = %s",
-                    (i,),
+        # Calculate timestamp for 1 hour ago
+        one_hour_ago = datetime.now() - timedelta(hours=1)
+        logger.info(f"Retrieving data since {one_hour_ago.isoformat()}")
+
+        try:
+            # Execute a single query to get all data from the last hour
+            cursor.execute(
+                """SELECT id, user_id, item, quantity, price, category_id, timestamp 
+                FROM purchases 
+                WHERE timestamp >= %s""",
+                (one_hour_ago,),
+            )
+            results = cursor.fetchall()
+            logger.info(f"Retrieved {len(results)} total rows")
+
+            # Skip if no results
+            if not results:
+                logger.warning("No data retrieved for the last hour")
+                return
+
+            # Group results by category_id
+            categorized_data = {}
+            for row in results:
+                category_id = row[5]  # category_id is at index 5
+
+                if category_id not in categorized_data:
+                    categorized_data[category_id] = {
+                        "category_id": category_id,
+                        "data": [],
+                    }
+
+                # Transform the data
+                categorized_data[category_id]["data"].append(
+                    {
+                        "user_id": row[1],
+                        "item_name": row[2].upper(),
+                        "total_spent": row[3] * row[4],
+                        "timestamp": row[6].isoformat() if row[6] else None,
+                    }
                 )
-                results = cursor.fetchall()
-                logger.info(f"Retrieved {len(results)} rows for category_id = {i}")
 
-                # Skip if no results
-                if not results:
-                    logger.warning(f"No data retrieved for category_id = {i}")
-                    continue
+            logger.info(f"Data grouped into {len(categorized_data)} categories")
 
-                # Transform data
-                transformed = {"category_id": i, "data": []}
-                for row in results:
-                    transformed["data"].append(
-                        {
-                            "user_id": row[1],
-                            "item_name": row[2].upper(),
-                            "total_spent": row[3] * row[4],
-                        }
-                    )
-
-                # Load data to API
-                logger.info(
-                    f"Sending batch for category_id = {i} with {len(transformed['data'])} records to API"
-                )
+            # Send each category batch to the API
+            for category_id, transformed in categorized_data.items():
                 try:
-                    response = requests.post(
+                    logger.info(
+                        f"Sending batch for category_id = {category_id} with {len(transformed['data'])} records to API"
+                    )
+                    response = session.post(
                         "https://api.example.com/receive",
                         json=transformed,
                         headers={
@@ -87,18 +122,17 @@ def run_etl() -> None:
 
                     if response.status_code >= 200 and response.status_code < 300:
                         logger.info(
-                            f"Batch {i} - API request successful: Status Code {response.status_code}"
+                            f"Category {category_id} - API request successful: Status Code {response.status_code}"
                         )
                     else:
                         logger.error(
-                            f"Batch {i} - API request failed: Status Code {response.status_code}, Response: {response.text}"
+                            f"Category {category_id} - API request failed: Status Code {response.status_code}, Response: {response.text}"
                         )
                 except requests.RequestException as e:
-                    logger.error(f"Batch {i} - API request error: {e}")
-            except psycopg2.Error as e:
-                logger.error(f"Database error during query for category_id = {i}: {e}")
-                # Continue with other categories even if one fails
-                continue
+                    logger.error(f"Category {category_id} - API request error: {e}")
+
+        except psycopg2.Error as e:
+            logger.error(f"Database error during query execution: {e}")
 
     except psycopg2.Error as e:
         logger.error(f"Database connection error: {e}")
@@ -114,5 +148,4 @@ def run_etl() -> None:
 
 
 if __name__ == "__main__":
-    logger.info("Starting ETL process")
     run_etl()
