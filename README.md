@@ -1,10 +1,24 @@
 # Writing Quality Python Code: An ETL Process Example
 
-This tutorial demonstrates how to write high-quality Python code through an iterative improvement process. We'll focus on three key aspects of quality code:
+This tutorial demonstrates a pragmatic approach to writing quality Python code through an iterative improvement process. We'll focus on three key aspects:
 
 1. **Readability**: Making code easy to understand for humans
-2. **Type Annotations**: Using Python's typing system to make code more robust
-3. **Testing**: Ensuring code correctness through automated tests
+2. **Testability**: Ensuring that the code is organized in a way that makes it easy to write tests
+3. **Typing**: Thinking about types, as a way to document the code but also improve its performance
+
+## Why This Matters
+
+By code quality, we generally mean the ability of the code to be:
+
+- Easy to understand for humans
+- Easy to test
+- Easy to maintain and evolve
+
+This is often mixed up with using advanced language features or following complex patterns. Aiming at "beautiful code", many developers tend to prematurely optimize or over-engineer their code, which can lead to code that is paradoxically hard to understand and maintain.
+
+Over the last few years working on data platforms, I have seen simple pieces of code running unchanged for several years, even if they did not look great. I have also seen code that was written with advanced design patterns, and that had to be completely refactored the next year when an evolution of the business requirements showed that the anticipated "future" was not aligned with the actual "new" needs.
+
+In this tutorial, I'll focus on a practical example directly inspired from recent code reviews in my team. I'll show you how your mindset and work process can directly impact the quality of your code. We'll also discuss the trade-offs between time spent and code structure.
 
 ## The Example: An ETL Process
 
@@ -24,28 +38,17 @@ This tutorial follows an iterative improvement approach. We'll start with a basi
 
 Each version will be saved in its own Python module (`v1.py`, `v2.py`, etc.) so you can see the progression of improvements. In a real project, the code will be broken into different files and modules.
 
-## Why This Matters
-
-Writing quality code isn't just about making things work—it's about creating maintainable, robust software that:
-
-- Is easy for others (and your future self) to understand
-- Catches errors early through type checking
-- Can be confidently modified without breaking existing functionality
-- Is well-tested to ensure correctness
-
-Let's begin our journey to better Python code!
-
 # v1: Simple Implementation
 
 Our first version is a straightforward implementation of the ETL process in a single function. It connects to a PostgreSQL database, executes 5 queries with different parameters, transforms the results, and sends the data to a third-party HTTP server.
 
-Note for the nitpickers: yes we could retrieve all the data in one query, but that's not the point here. Let's consider a case for which we want to retrieve the data in batches.
+Note for the nitpickers: yes, we could retrieve all the data in one query, but that's not the point here. Let's consider a case where we want to retrieve the data in batches.
 
 ```python
 def run_etl():
     """Run the ETL process. 
     
-    This code connects to a PostgreSQL database, perform 5 queries, 
+    This code connects to a PostgreSQL database, performs 5 queries, 
     transform the results and send the data to a third-party HTTP server.
     """
     conn = psycopg2.connect(
@@ -192,9 +195,9 @@ def run_etl() -> None:
         logger.info("ETL process completed")
 ```
 
-We can see that once we bring in "real life" consideration with error handling and different possible code paths, the code turns into spaghetti soup and becomes hard to understand. If you were not convinced, the point raised in the previous section about testability is even more relevant: it's cumbersome to write tests for all the possible paths.
+We can see that once we bring in "real life" considerations with error handling and different possible code paths, the code turns into spaghetti soup and becomes hard to understand. If you were not convinced, the point raised in the previous section about testability is even more relevant: it's cumbersome to write tests for all the possible paths.
 
-When I see this type of code, it typically means that the developer considered testing as an afterthought, not a priority. If you try to write tests "as you go" (even if you don't follow a strict Test-Driven-Development approach), you'll tend to proceed in more elementary steps, which will lead to a more structured and maintainable codebase. This is also transparent in the git history, and typically differentiate seasoned developers, who are in control of their process, from less experienced ones, who are only aiming at finding the solution.
+When I see this type of code, it typically means that the developer considered testing as an afterthought, not a priority. If you try to write tests "as you go" (even if you don't follow a strict Test-Driven-Development approach), you'll tend to proceed in more elementary steps, which will lead to a more structured and maintainable codebase. This is also transparent in the git history, and typically differentiates seasoned developers, who are in control of their process, from less experienced ones, who are only aiming at finding the solution.
 
 ## v3: Split the responsibilities into different functions
 
@@ -265,13 +268,13 @@ def run_etl():
     """Run the ETL process."""
     for i in range(5):
         data = run_query(i)
-        transformed = transform_data(data)
+        transformed = transform_data(i, data)
         load_data(transformed)
 ```
 
 This main function gives a clear picture of what the ETL process does, and it's much easier to understand before diving into the details.
 
-Note that this new version is not longer than the previous one, and wouldn't take more time to write. Following a different process while writing the code can greatly improve its quality. It provides several benefits:
+Note that this new version is not much longer than the previous one, and wouldn't take more time to write. Following a different process while writing the code can greatly improve its quality. It provides several benefits:
 
 - you can catch errors earlier
 - you can write tests more easily
@@ -292,9 +295,9 @@ for row in records:
     })
 ```
 
-This means that if I want to check that this code is correct, I have to go back to the `load_data` function, and even within this function review the SQL query itself. In the type of applications that I have been working on lately, this SQL query may be extremely complex, making this kind of review time-consuming and error-prone. In addition, if the database schema changes, the query will have to be updated, and the `transform_data` function will have to be updated as well, which may introduce new errors.
+This means that if I want to check that this code is correct, I have to go back to the `run_query` function, and even within this function review the SQL query itself. In the type of applications that I have been working on lately, this SQL query may be extremely complex, making this kind of review time-consuming and error-prone. In addition, if the database schema changes, the query will have to be updated, and the `transform_data` function will have to be updated as well, which may introduce new errors.
 
-This could have been avoided from the start by defining a better "contract" between each parts of the code.
+This could have been avoided from the start by defining a better "contract" between each part of the code.
 
 Let's define a type for the data that is passed between the functions:
 
@@ -427,19 +430,7 @@ Now, let's update `transform_data` and `load_data` to use this new dataclass:
 ```python
 def transform_data(category_id: int, records: List[Purchase]) -> APIData:
     """Transform the data."""
-    transformed = {
-        "categoryId": category_id,
-        "data": []
-    }
-    
-    for row in records:
-        transformed["data"].append({
-            "userId": row.user_id,
-            "itemName": row.item.upper(),
-            "totalSpent": row.total_spent
-        })
-    
-    return APIData(
+        return APIData(
         category_id=category_id,
         data=[APIRecord(
             user_id=row.user_id,
@@ -470,3 +461,13 @@ def load_data(payload: APIData) -> None:
     else:
         print(f"Status Code: {response.status_code}")
 ```
+
+The code is now more maintainable and testable, and the contract between the functions is clearer. We can feel happy, we have written "nice code".
+
+It's important to pause here and to consider the benefit/cost ratio of this kind of refactoring. This code is better organized and more maintainable, but it's also 40% longer than v3. For a single-use script, you would probably be wasting time here, and it's important to keep this in mind. However, in a production grade codebase, with a focus on testing, a large part of the coding part will actually be spent on writing tests, so this better organization of the code may actually lead to a net time saving, compared to reaching the same level of test coverage with v2.
+
+However, there is no free lunch and if you consider actually running this code, v4 will run at a much higher cost if it processes a non-negligible amount of data. Can you detect the problem?
+
+## Memory consideration
+
+When going through this kind of refactoring exercise, it's very easy to try to write "beautiful code". However, that's never the goal, as software developers we are paid to solve problems and not to create pieces of art.
